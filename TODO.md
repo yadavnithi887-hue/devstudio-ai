@@ -1,0 +1,6 @@
+- [ ] Add Toaster component to Layout.jsx to enable toast notifications.
+- [ ] Add warning modal in SettingsPanel for switching tabs with unsaved changes, with yes/no options.
+- [ ] Add state for pending category to switch to.
+- [ ] Add callback prop to reset unsaved when discarding changes.
+- [ ] Update onClick logic for categories to handle unsaved state properly.
+- [ ] Test that success message appears on save, warning modal shows on tab switch with unsaved, and tabs switch after confirming discard.
