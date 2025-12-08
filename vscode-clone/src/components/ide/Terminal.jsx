@@ -5,8 +5,9 @@ import { WebLinksAddon } from 'xterm-addon-web-links';
 import { SearchAddon } from 'xterm-addon-search';
 import { Unicode11Addon } from 'xterm-addon-unicode11';
 import 'xterm/css/xterm.css';
-import { ChevronUp, X, Minus, Plus, Trash2, Monitor, AlertCircle, AlertTriangle } from 'lucide-react';
+import { ChevronUp, X, Minus, Plus, Trash2, Monitor, AlertCircle, AlertTriangle, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner'; // Toasts ke liye
 
 // --- Problems Tab ---
 const ProblemsTab = ({ problems, onNavigate }) => {
@@ -39,26 +40,15 @@ const TerminalInstance = ({ id, active, onData }) => {
   const fitAddonRef = useRef(null);
   const termInstance = useRef(null);
 
-  // Helper: Safe Fit Function
   const safeFit = () => {
-    if (!fitAddonRef.current || !termInstance.current) return;
-    
-    // 🔥 CRITICAL FIX: Check if element is visible in DOM
-    // offsetParent null tab hota hai jab element 'display: none' ho
-    if (terminalRef.current && terminalRef.current.offsetParent !== null) {
-      try {
+    try {
+      if (terminalRef.current && terminalRef.current.offsetParent !== null && fitAddonRef.current) {
         fitAddonRef.current.fit();
-        // Backend sync
-        if (window.electronAPI && termInstance.current.cols) {
-           window.electronAPI.resizeTerminal(id, { 
-             cols: termInstance.current.cols, 
-             rows: termInstance.current.rows 
-           });
+        if (window.electronAPI && termInstance.current?.cols) {
+           window.electronAPI.resizeTerminal(id, { cols: termInstance.current.cols, rows: termInstance.current.rows });
         }
-      } catch (e) {
-        // Silent catch (Dimensions error yahan suppress ho jayega)
       }
-    }
+    } catch (e) {}
   };
 
   useEffect(() => {
@@ -120,12 +110,33 @@ const TerminalInstance = ({ id, active, onData }) => {
   return <div className={cn("w-full h-full p-1 pl-3", active ? "block" : "hidden")} ref={terminalRef} />;
 };
 
-// --- Main Terminal Component ---
+// --- Main Terminal Manager ---
 export default function Terminal({ isOpen, onToggle, onMaximize, isMaximized, problems = [], outputLogs = [], onNavigateProblem }) {
   const [activeTab, setActiveTab] = useState('terminal');
   const [terminals, setTerminals] = useState([]);
   const [activeTermId, setActiveTermId] = useState(null);
   const termRefs = useRef({});
+
+  // 🔥 DETECT URL & SHOW BUTTON
+  const checkForUrl = (text) => {
+    // Regex to find Localhost URLs
+    const urlRegex = /(http:\/\/localhost:\d+|http:\/\/127\.0\.0\.1:\d+)/g;
+    const match = text.match(urlRegex);
+
+    if (match) {
+        const url = match[0];
+        toast.success(`Server running at ${url}`, {
+            duration: 10000, // 10 seconds
+            action: {
+                label: 'Open',
+                onClick: () => {
+                     require('electron').shell.openExternal(url); // Electron shell use karein
+                }
+            },
+            icon: <ExternalLink size={16} className="text-green-400"/>
+        });
+    }
+  };
 
   useEffect(() => {
     if (isOpen && terminals.length === 0) addTerminal();
@@ -134,17 +145,58 @@ export default function Terminal({ isOpen, onToggle, onMaximize, isMaximized, pr
   useEffect(() => {
     if (!window.electronAPI) return;
     const removeListener = window.electronAPI.onTerminalData((id, data) => {
-      if (termRefs.current[id]) termRefs.current[id].write(data);
+      // Write to xterm
+      if (termRefs.current[id]) {
+          termRefs.current[id].write(data);
+      }
+      // Check for URLs
+      checkForUrl(data);
     });
     return () => removeListener();
   }, []);
 
-  const addTerminal = async () => {
+  // 🔥 HANDLE COMMANDS FROM DEBUG PANEL
+  useEffect(() => {
+    const handleRunCommand = (e) => {
+      const { cmd, newWindow, path } = e.detail;
+
+      // Agar New Window bola hai, to naya banao
+      if (newWindow) {
+         addTerminal(path).then((newId) => {
+             setTimeout(() => {
+                 if(newId && window.electronAPI) window.electronAPI.writeTerminal(newId, cmd);
+             }, 500); // Thoda wait taki shell ready ho jaye
+         });
+      }
+      // Nahi to active me chalao (agar koi hai)
+      else if (activeTermId && window.electronAPI) {
+         window.electronAPI.writeTerminal(activeTermId, cmd);
+      }
+      // Agar kuch nahi hai to naya banao
+      else {
+         addTerminal(path).then((newId) => {
+             setTimeout(() => { if(newId) window.electronAPI.writeTerminal(newId, cmd); }, 500);
+         });
+      }
+    };
+
+    window.addEventListener('devstudio:run-command', handleRunCommand);
+    return () => window.removeEventListener('devstudio:run-command', handleRunCommand);
+  }, [activeTermId, terminals]);
+
+  // Add Terminal (Accepts optional path)
+  const addTerminal = async (cwd = null) => {
     if (!window.electronAPI) return;
+    const rootPath = localStorage.getItem('devstudio-last-project');
+    const targetPath = cwd || rootPath; // Agar specific path hai to wo, nahi to root
+
     try {
-      const newId = await window.electronAPI.createTerminal(localStorage.getItem('devstudio-last-project'));
-      setTerminals(p => [...p, { id: newId, name: 'PowerShell' }]);
+      const newId = await window.electronAPI.createTerminal(targetPath);
+      const termName = cwd ? 'Task' : 'PowerShell'; // Name distinguish karo
+      
+      setTerminals(p => [...p, { id: newId, name: termName }]);
       setActiveTermId(newId);
+      return newId;
     } catch (e) {}
   };
 
@@ -204,13 +256,13 @@ export default function Terminal({ isOpen, onToggle, onMaximize, isMaximized, pr
            </div>
            <div className="w-36 bg-[#252526] border-l border-[#3c3c3c] flex flex-col">
               <div className="flex items-center justify-between p-2 text-[10px] text-[#cccccc] font-medium bg-[#2d2d2d]">
-                 <span>POWERSHELL</span>
-                 <button onClick={addTerminal} className="hover:bg-[#3c3c3c] p-1 rounded"><Plus size={12}/></button>
+                 <span>PROCESSES</span>
+                 <button onClick={() => addTerminal()} className="hover:bg-[#3c3c3c] p-1 rounded"><Plus size={12}/></button>
               </div>
               <div className="flex-1 overflow-y-auto">
                  {terminals.map(t => (
                    <div key={t.id} onClick={() => setActiveTermId(t.id)} className={cn("flex items-center justify-between px-3 py-1.5 cursor-pointer text-xs group", activeTermId === t.id ? "bg-[#37373d] text-white" : "text-[#858585] hover:text-[#cccccc]")}>
-                      <div className="flex items-center gap-2 overflow-hidden"><Monitor size={12} /><span className="truncate">powershell</span></div>
+                      <div className="flex items-center gap-2 overflow-hidden"><Monitor size={12} /><span className="truncate">{t.name}</span></div>
                       <button onClick={(e) => removeTerminal(t.id, e)} className="opacity-0 group-hover:opacity-100 hover:text-red-400"><Trash2 size={12}/></button>
                    </div>
                  ))}

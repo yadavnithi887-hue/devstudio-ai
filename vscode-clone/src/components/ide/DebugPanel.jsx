@@ -1,225 +1,164 @@
-import React, { useState } from 'react';
-import { Play, Pause, SkipForward, ArrowDownToLine, ArrowUpFromLine, RotateCcw, Square, ChevronDown, ChevronRight, Circle, Bug, Hash, Layers, Terminal } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import React, { useState, useEffect } from 'react';
+import { Play, RefreshCw, Package, FileCode, AlertCircle, Bug, Folder, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 
-export default function DebugPanel({ onShowComingSoon }) {
-  const [isDebugging, setIsDebugging] = useState(false);
-  const [breakpointsExpanded, setBreakpointsExpanded] = useState(true);
-  const [variablesExpanded, setVariablesExpanded] = useState(true);
-  const [callStackExpanded, setCallStackExpanded] = useState(true);
+export default function DebugPanel({ activeFile, files = [] }) {
+  const [loading, setLoading] = useState(false);
+  const [projectScripts, setProjectScripts] = useState([]); 
   
-  const breakpoints = [
-    { file: 'app.js', line: 15, enabled: true },
-    { file: 'utils.js', line: 8, enabled: true },
-    { file: 'index.js', line: 23, enabled: false },
-  ];
-  
-  const variables = [
-    { name: 'count', value: '0', type: 'number' },
-    { name: 'items', value: 'Array(3)', type: 'array' },
-    { name: 'user', value: '{...}', type: 'object' },
-    { name: 'isLoading', value: 'false', type: 'boolean' },
-  ];
-  
-  const callStack = [
-    { name: 'handleClick', file: 'app.js', line: 15 },
-    { name: 'onClick', file: 'Button.jsx', line: 42 },
-    { name: 'anonymous', file: 'react-dom.js', line: 1024 },
-  ];
+  const rootPath = localStorage.getItem('devstudio-last-project');
+
+  const refreshScripts = async () => {
+    if (!rootPath || !window.electronAPI) return;
+    setLoading(true);
+    const foundProjects = [];
+    try {
+      const packageFiles = files.filter(f => f.name === 'package.json');
+      for (const file of packageFiles) {
+        const content = await window.electronAPI.readFile(file.realPath);
+        if (content && content.trim()) {
+          try {
+            const json = JSON.parse(content);
+            if (json.scripts) {
+              let folderPath = file.realPath.replace(/\\package.json$/, '').replace(/\/package.json$/, '');
+              let folderName = file.path.replace('/package.json', '');
+              if (folderName === 'package.json' || folderName === '') folderName = 'ROOT';
+              foundProjects.push({ folderName, fullPath: folderPath, scripts: json.scripts });
+            }
+          } catch (e) {}
+        }
+      }
+      setProjectScripts(foundProjects);
+    } catch (e) {}
+    setLoading(false);
+  };
+
+  useEffect(() => { refreshScripts(); }, [files.length]); 
+
+  // 🔥 NEW: Send Command Object (Not just string)
+  const sendCommand = (cmd, path, isNew = false) => {
+    const event = new CustomEvent('devstudio:run-command', { 
+        detail: { 
+            cmd, 
+            path, 
+            newWindow: isNew // 🔥 Ye batayega ki naya terminal kholna hai
+        } 
+    });
+    window.dispatchEvent(event);
+  };
+
+  const runNpmScript = (scriptName, folderPath) => {
+    // Windows path fix
+    const safePath = folderPath ? folderPath.replace(/\//g, '\\') : null;
+    
+    // Command construct
+    let fullCmd = '';
+    if (safePath) fullCmd += `cd "${safePath}" ; `; // PowerShell separator
+    fullCmd += `npm run ${scriptName}\r`;
+
+    // Send with newWindow: true
+    sendCommand(fullCmd, safePath, true);
+    toast.info(`Starting: ${scriptName}...`);
+  };
+
+  const runActiveFile = () => {
+    if (!activeFile) return toast.error("Open a file first.");
+
+    const ext = activeFile.name.split('.').pop().toLowerCase();
+    // Folder path nikalo
+    const fileDir = activeFile.realPath.substring(0, activeFile.realPath.lastIndexOf(activeFile.name.includes('\\') ? '\\' : '/'));
+    const safeDir = fileDir.replace(/\//g, '\\'); // Windows path fix
+
+    let command = '';
+
+    switch(ext) {
+        // 1. JavaScript / Node
+        case 'js':
+        case 'cjs':
+        case 'mjs':
+            command = `node "${activeFile.name}"`;
+            break;
+
+        // 2. Python (python or py)
+        case 'py':
+            // Try 'python' first, sometimes it's 'py' on Windows
+            command = `python "${activeFile.name}"`;
+            break;
+
+        // 3. Java (Single File Execution - Java 11+)
+        case 'java':
+            command = `java "${activeFile.name}"`;
+            break;
+
+        // 4. C++ (Needs MinGW/G++)
+        case 'cpp':
+        case 'cc':
+            // Compile to output.exe then run
+            command = `g++ "${activeFile.name}" -o output.exe ; if ($?) { .\\output.exe }`;
+            break;
+
+        // 5. C Language
+        case 'c':
+            command = `gcc "${activeFile.name}" -o output.exe ; if ($?) { .\\output.exe }`;
+            break;
+
+        // 6. TypeScript
+        case 'ts':
+            command = `npx ts-node "${activeFile.name}"`;
+            break;
+
+        case 'json':
+            if (activeFile.name === 'package.json') { command = `npm install`; toast.info("Installing dependencies..."); }
+            else return toast.warning("Cannot run JSON");
+            break;
+
+        case 'html':
+            // HTML ke liye file ka path copy karke browser me kholne ka suggestion
+            toast.info("Opening in Default Browser...");
+            require('electron').shell.openPath(activeFile.realPath);
+            return;
+
+        default: return toast.warning(`No runner configured for .${ext}`);
+    }
+
+    // 🔥 Naya Terminal Kholo aur Command Chalao
+    const fullCmd = `cd "${safeDir}" ; ${command}\r`;
+    sendCommand(fullCmd, safeDir, true);
+  };
 
   return (
-    <div className="h-full bg-[#252526] flex flex-col">
+    <div className="h-full bg-[#1e1e1e] flex flex-col text-white">
       <div className="p-3 border-b border-[#3c3c3c]">
-        <div className="text-xs uppercase tracking-wider text-[#bbbbbb] mb-3">Run and Debug</div>
-        
-        {/* Debug Controls */}
-        <div className="flex items-center gap-1 mb-3 p-1 bg-[#3c3c3c] rounded">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              if (isDebugging) {
-                setIsDebugging(false);
-              } else {
-                onShowComingSoon?.('Debugger');
-              }
-            }}
-            className={cn(
-              "h-7 w-7 p-0",
-              isDebugging ? "text-yellow-500" : "text-green-500 hover:text-green-400"
-            )}
-            title={isDebugging ? "Pause" : "Start Debugging"}
-          >
-            {isDebugging ? <Pause size={16} /> : <Play size={16} />}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onShowComingSoon?.('Stop Debugging')}
-            disabled={!isDebugging}
-            className="h-7 w-7 p-0 text-red-500 disabled:opacity-30"
-            title="Stop"
-          >
-            <Square size={14} />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onShowComingSoon?.('Restart Debugging')}
-            disabled={!isDebugging}
-            className="h-7 w-7 p-0 text-green-500 disabled:opacity-30"
-            title="Restart"
-          >
-            <RotateCcw size={14} />
-          </Button>
-          <div className="w-px h-5 bg-[#555] mx-1" />
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onShowComingSoon?.('Step Over')}
-            disabled={!isDebugging}
-            className="h-7 w-7 p-0 text-[#858585] disabled:opacity-30"
-            title="Step Over (F10)"
-          >
-            <SkipForward size={14} />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onShowComingSoon?.('Step Into')}
-            disabled={!isDebugging}
-            className="h-7 w-7 p-0 text-[#858585] disabled:opacity-30"
-            title="Step Into (F11)"
-          >
-            <ArrowDownToLine size={14} />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onShowComingSoon?.('Step Out')}
-            disabled={!isDebugging}
-            className="h-7 w-7 p-0 text-[#858585] disabled:opacity-30"
-            title="Step Out (Shift+F11)"
-          >
-            <ArrowUpFromLine size={14} />
-          </Button>
+        <div className="flex items-center justify-between mb-3 text-[#bbbbbb]">
+           <span className="text-[11px] uppercase font-medium">Run and Debug</span>
+           <RefreshCw size={14} onClick={refreshScripts} className={`cursor-pointer hover:text-white ${loading && 'animate-spin'}`}/>
         </div>
-        
-        {/* Configuration Dropdown */}
-        <div 
-          onClick={() => onShowComingSoon?.('Debug Configuration')}
-          className="flex items-center gap-2 px-2 py-1.5 bg-[#3c3c3c] rounded cursor-pointer hover:bg-[#454545]"
-        >
-          <Bug size={14} className="text-[#007acc]" />
-          <span className="text-sm text-white flex-1">Launch Chrome</span>
-          <ChevronDown size={14} className="text-[#858585]" />
-        </div>
+        <Button onClick={runActiveFile} className={`w-full text-xs h-7 mb-2 ${activeFile ? 'bg-[#2da44e] hover:bg-[#2c974b]' : 'bg-[#3c3c3c] text-[#858585] cursor-not-allowed'}`} disabled={!activeFile}>
+           <Play size={12} className="mr-2"/> {activeFile ? `Run ${activeFile.name}` : 'Run Active File'}
+        </Button>
       </div>
-      
-      <div className="flex-1 overflow-y-auto">
-        {/* Variables */}
-        <div className="border-b border-[#3c3c3c]">
-          <div 
-            onClick={() => setVariablesExpanded(!variablesExpanded)}
-            className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[#2a2d2e] text-xs text-[#cccccc]"
-          >
-            {variablesExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <Hash size={14} className="text-[#858585]" />
-            <span className="font-medium">Variables</span>
-          </div>
-          
-          {variablesExpanded && (
-            <div className="pb-2">
-              {variables.map((v, i) => (
-                <div key={i} className="flex items-center gap-2 px-7 py-1 hover:bg-[#2a2d2e] text-xs">
-                  <span className="text-[#9cdcfe]">{v.name}</span>
-                  <span className="text-[#858585]">=</span>
-                  <span className={cn(
-                    v.type === 'number' && "text-[#b5cea8]",
-                    v.type === 'string' && "text-[#ce9178]",
-                    v.type === 'boolean' && "text-[#569cd6]",
-                    v.type === 'array' && "text-[#4ec9b0]",
-                    v.type === 'object' && "text-[#4ec9b0]"
-                  )}>
-                    {v.value}
-                  </span>
-                </div>
-              ))}
+
+      <div className="flex-1 overflow-y-auto p-0">
+        {projectScripts.length > 0 ? projectScripts.map((proj, idx) => (
+            <div key={idx} className="mb-1 border-b border-[#3c3c3c]">
+               <div className="flex items-center px-3 py-2 bg-[#2a2d2e] text-xs font-bold text-[#cccccc]">
+                  <Folder size={12} className="mr-2 text-yellow-500"/>
+                  <span className="uppercase truncate">{proj.folderName}</span>
+               </div>
+               {Object.entries(proj.scripts).map(([key, cmd]) => (
+                 <div key={key} className="group flex items-center justify-between px-3 py-2 hover:bg-[#37373d] cursor-pointer">
+                    <div className="flex flex-col overflow-hidden"><span className="text-sm text-[#cccccc] font-medium">{key}</span><span className="text-[10px] text-[#6e6e6e] truncate w-40" title={cmd}>{cmd}</span></div>
+                    {/* 🔥 Play Button now triggers new terminal */}
+                    <button onClick={() => runNpmScript(key, proj.fullPath)} className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#007acc] rounded text-white bg-[#3c3c3c]"><Play size={12} /></button>
+                 </div>
+               ))}
             </div>
-          )}
-        </div>
-        
-        {/* Call Stack */}
-        <div className="border-b border-[#3c3c3c]">
-          <div 
-            onClick={() => setCallStackExpanded(!callStackExpanded)}
-            className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[#2a2d2e] text-xs text-[#cccccc]"
-          >
-            {callStackExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <Layers size={14} className="text-[#858585]" />
-            <span className="font-medium">Call Stack</span>
+          )) : (
+          <div className="p-4 text-center text-[#858585] text-xs">
+             <p className="mb-2">No scripts found.</p>
           </div>
-          
-          {callStackExpanded && (
-            <div className="pb-2">
-              {callStack.map((frame, i) => (
-                <div key={i} className="flex items-center gap-2 px-7 py-1 hover:bg-[#2a2d2e] text-xs cursor-pointer">
-                  <span className="text-[#dcdcaa]">{frame.name}</span>
-                  <span className="text-[#858585]">{frame.file}:{frame.line}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        
-        {/* Breakpoints */}
-        <div>
-          <div 
-            onClick={() => setBreakpointsExpanded(!breakpointsExpanded)}
-            className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[#2a2d2e] text-xs text-[#cccccc]"
-          >
-            {breakpointsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <Circle size={14} className="text-red-500 fill-red-500" />
-            <span className="font-medium">Breakpoints</span>
-            <span className="text-[#858585]">({breakpoints.length})</span>
-          </div>
-          
-          {breakpointsExpanded && (
-            <div className="pb-2">
-              {breakpoints.map((bp, i) => (
-                <div key={i} className="flex items-center gap-2 px-5 py-1 hover:bg-[#2a2d2e] text-xs">
-                  <input 
-                    type="checkbox" 
-                    checked={bp.enabled}
-                    onChange={() => onShowComingSoon?.('Toggle Breakpoint')}
-                    className="w-3 h-3 accent-red-500"
-                  />
-                  <Circle size={10} className={cn(
-                    bp.enabled ? "text-red-500 fill-red-500" : "text-[#858585]"
-                  )} />
-                  <span className="text-[#cccccc]">{bp.file}</span>
-                  <span className="text-[#858585]">:{bp.line}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-      
-      {/* Debug Console */}
-      <div className="border-t border-[#3c3c3c] p-2">
-        <div className="flex items-center gap-2 text-xs text-[#858585] mb-1">
-          <Terminal size={12} />
-          Debug Console
-        </div>
-        <div className="h-16 bg-[#1e1e1e] rounded p-2 text-xs font-mono text-[#6e6e6e] overflow-auto">
-          {isDebugging ? (
-            <div className="text-[#cccccc]">Debugger attached. Waiting for breakpoint...</div>
-          ) : (
-            <div>Start debugging to see output here</div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );

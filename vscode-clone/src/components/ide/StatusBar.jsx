@@ -1,90 +1,82 @@
 import React from 'react';
-import { GitBranch, AlertCircle, CheckCircle, Bell, Settings, Wifi, Eye, EyeOff, Terminal, Layout } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { GitBranch, Wifi, Bell, Settings, Activity } from 'lucide-react';
 
-export default function StatusBar({ 
-  activeFile, 
-  cursorPosition, 
-  previewOpen, 
-  onTogglePreview,
-  terminalOpen,
-  onToggleTerminal 
-}) {
-  const getLanguage = (filename) => {
-    if (!filename) return 'Plain Text';
-    const ext = filename.split('.').pop()?.toLowerCase();
-    const languages = {
-      js: 'JavaScript',
-      jsx: 'JavaScript React',
-      ts: 'TypeScript',
-      tsx: 'TypeScript React',
-      css: 'CSS',
-      html: 'HTML',
-      json: 'JSON',
-      md: 'Markdown',
-      py: 'Python',
-      java: 'Java',
-    };
-    return languages[ext] || 'Plain Text';
-  };
+/**
+ * StatusBar Component
+ * Displays system info + extension-provided items
+ */
+export default function StatusBar({ extensionItems = [], onItemClick }) {
   
+  const handleItemClick = (item) => {
+    console.log('🖱️ StatusBar item clicked:', item);
+    
+    if (item.command) {
+      // Execute via callback (which calls registry.executeCommand)
+      if (onItemClick) {
+        onItemClick(item.command);
+      } else {
+        console.warn('No onItemClick handler provided to StatusBar');
+      }
+    } else if (item.onClick) {
+      // Direct onClick handler (legacy support)
+      try {
+        item.onClick();
+      } catch (e) {
+        console.error('Error executing item onClick:', e);
+      }
+    }
+  };
+
   return (
-    <div className="h-6 bg-[#007acc] text-white text-xs flex items-center justify-between px-2 flex-shrink-0">
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1 hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer">
+    <div className="h-6 bg-[#007acc] flex items-center justify-between px-2 text-xs text-white">
+      {/* Left side - System info */}
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1">
           <GitBranch size={12} />
           <span>main</span>
         </div>
-        <div className="flex items-center gap-1 hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer">
-          <CheckCircle size={12} />
-          <span>0</span>
-          <AlertCircle size={12} className="ml-1" />
-          <span>0</span>
+        <div className="flex items-center gap-1">
+          <Activity size={12} />
+          <span>0 Errors, 0 Warnings</span>
         </div>
       </div>
-      
-      <div className="flex items-center gap-2">
-        {/* Toggle buttons */}
-        <button
-          onClick={onToggleTerminal}
-          className={cn(
-            "flex items-center gap-1 px-2 py-0.5 rounded transition-colors",
-            terminalOpen ? "bg-white/20" : "hover:bg-white/10"
-          )}
-          title="Toggle Terminal (Ctrl+`)"
-        >
-          <Terminal size={12} />
-          <span className="hidden sm:inline">Terminal</span>
-        </button>
-        
-        <button
-          onClick={onTogglePreview}
-          className={cn(
-            "flex items-center gap-1 px-2 py-0.5 rounded transition-colors",
-            previewOpen ? "bg-white/20" : "hover:bg-white/10"
-          )}
-          title="Toggle Preview"
-        >
-          {previewOpen ? <Eye size={12} /> : <EyeOff size={12} />}
-          <span className="hidden sm:inline">Preview</span>
-        </button>
-        
-        <div className="w-px h-4 bg-white/20 mx-1" />
-        
-        <span className="hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer">
-          Ln {cursorPosition?.line || 1}, Col {cursorPosition?.column || 1}
-        </span>
-        <span className="hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer hidden sm:block">
-          Spaces: 2
-        </span>
-        <span className="hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer hidden sm:block">
-          UTF-8
-        </span>
-        <span className="hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer">
-          {getLanguage(activeFile?.name)}
-        </span>
-        <div className="flex items-center gap-1 hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer">
+
+      {/* Right side - Extension items + system icons */}
+      <div className="flex items-center gap-3">
+        {/* ✅ Render extension-provided status bar items */}
+        {extensionItems.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => handleItemClick(item)}
+            className="flex items-center gap-1 hover:bg-[#005a9e] px-2 py-0.5 rounded transition-colors"
+            title={item.tooltip || item.text}
+          >
+            {/* Icon (if provided) */}
+            {item.icon && (
+              <span className="text-xs">{item.icon}</span>
+            )}
+            
+            {/* Text */}
+            <span>{item.text}</span>
+            
+            {/* Badge/Count (if provided) */}
+            {item.badge && (
+              <span className="ml-1 bg-white text-[#007acc] px-1 rounded text-[10px] font-semibold">
+                {item.badge}
+              </span>
+            )}
+          </button>
+        ))}
+
+        {/* System icons */}
+        <div className="flex items-center gap-1 hover:bg-[#005a9e] px-1 rounded cursor-pointer">
           <Wifi size={12} />
+        </div>
+        <div className="flex items-center gap-1 hover:bg-[#005a9e] px-1 rounded cursor-pointer">
+          <Bell size={12} />
+        </div>
+        <div className="flex items-center gap-1 hover:bg-[#005a9e] px-1 rounded cursor-pointer">
+          <Settings size={12} />
         </div>
       </div>
     </div>
