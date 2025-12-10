@@ -18,29 +18,93 @@ class ExtensionRegistry {
     this.sidebarPanels = new Map();
     this.settingsSchema = [];
     
-    // ✅ Store actual UI items (not just callbacks)
+    // Store actual UI items
     this.statusBarItems = [];
     this.editorButtons = [];
     
-    // ✅ Callbacks for real-time updates
+    // Callbacks for real-time updates
     this.statusBarCallbacks = [];
     this.editorButtonCallbacks = [];
     
-    // ✅ Initialization flag
+    // 🔥 NEW: Extension state management
+    this.extensionStates = new Map(); // Track enabled/disabled state
+    this.extensionMetadata = []; // Store full metadata
+    
+    // Initialization flag
     this.initialized = false;
+    
+    // 🔥 Load saved extension states from localStorage
+    this.loadExtensionStates();
+  }
+
+  // 🔥 Load extension states from localStorage
+  loadExtensionStates() {
+    try {
+      const saved = localStorage.getItem('extension_states');
+      if (saved) {
+        const states = JSON.parse(saved);
+        Object.entries(states).forEach(([id, enabled]) => {
+          this.extensionStates.set(id, enabled);
+        });
+        console.log('📦 Loaded extension states:', states);
+      }
+    } catch (e) {
+      console.error('Error loading extension states:', e);
+    }
+  }
+
+  // 🔥 Save extension states to localStorage
+  saveExtensionStates() {
+    try {
+      const states = {};
+      this.extensionStates.forEach((enabled, id) => {
+        states[id] = enabled;
+      });
+      localStorage.setItem('extension_states', JSON.stringify(states));
+      console.log('💾 Saved extension states:', states);
+    } catch (e) {
+      console.error('Error saving extension states:', e);
+    }
+  }
+
+  // 🔥 Check if extension is enabled
+  isExtensionEnabled(extensionId) {
+    // Default to enabled if no state is set
+    return this.extensionStates.get(extensionId) !== false;
+  }
+
+  // 🔥 Enable/Disable extension
+  setExtensionEnabled(extensionId, enabled) {
+    console.log(`${enabled ? '✅' : '❌'} ${extensionId} → ${enabled ? 'ENABLED' : 'DISABLED'}`);
+    
+    this.extensionStates.set(extensionId, enabled);
+    this.saveExtensionStates();
+    
+    // Re-initialize to apply changes
+    if (this.context) {
+      this.initialize(this.context);
+    }
+  }
+
+  // 🔥 Get all extensions with metadata
+  getAllExtensions() {
+    return this.extensionMetadata;
   }
 
   initialize(context) {
     console.log("🚀 Initializing Internal Extensions...");
+    
+    // Store context for re-initialization
+    this.context = context;
 
-    // ✅ Clear everything on re-initialization
+    // Clear everything on re-initialization
     this.commands.clear();
     this.sidebarItems = [];
     this.sidebarPanels.clear();
     this.settingsSchema = [];
     this.statusBarItems = [];
     this.editorButtons = [];
-    // ⚠️ Don't clear callbacks - they're from Layout
+    this.extensionMetadata = [];
 
     this.extensions.forEach(ext => {
       if (!ext.metadata) {
@@ -48,11 +112,31 @@ class ExtensionRegistry {
         return;
       }
       
+      const extId = ext.metadata.id;
+      const isEnabled = this.isExtensionEnabled(extId);
+      
+      // 🔥 Store metadata for all extensions (even disabled ones)
+      this.extensionMetadata.push({
+        ...ext.metadata,
+        enabled: isEnabled,
+        settings: ext.settings || []
+      });
+
+      // Skip activation if disabled
+      if (!isEnabled) {
+        console.log(`⏸️  ${ext.metadata.name} (DISABLED)`);
+        return;
+      }
+      
       console.log(`📦 Loading: ${ext.metadata.name}`);
 
-      // Load settings schema
+      // Load settings schema (only if enabled)
       if (ext.settings) {
-        this.settingsSchema.push(...ext.settings);
+        const settingsWithExtId = ext.settings.map(s => ({
+          ...s,
+          extensionId: extId
+        }));
+        this.settingsSchema.push(...settingsWithExtId);
       }
 
       // Activate extension
@@ -61,53 +145,55 @@ class ExtensionRegistry {
           const extContext = {
             ...context,
 
-            // ✅ Register commands
+            // Register commands
             registerCommand: (id, fn) => {
               console.log(`  ✓ Command registered: ${id}`);
               this.commands.set(id, fn);
             },
 
-            // ✅ Register sidebar panels
+            // Register sidebar panels
             registerSidebarPanel: (id, item, component) => {
               console.log(`  ✓ Sidebar panel registered: ${id}`);
-              this.sidebarItems.push({ id, ...item });
+              this.sidebarItems.push({ 
+                id, 
+                ...item,
+                extensionId: extId // Track which extension owns this
+              });
               this.sidebarPanels.set(id, component);
             },
 
-            // ✅ Window API for UI elements
+            // Window API for UI elements
             window: {
               showInformationMessage: (msg) => context.toast.success(msg),
               showWarningMessage: (msg) => context.toast.warning(msg),
               showErrorMessage: (msg) => context.toast.error(msg),
                   
-              // ✅ Create status bar item
+              // Create status bar item
               createStatusBarItem: (item) => {
                 console.log(`  ✓ Status bar item created:`, item);
                 
-                // Store the item
-                this.statusBarItems.push(item);
+                const itemWithExtId = { ...item, extensionId: extId };
+                this.statusBarItems.push(itemWithExtId);
                 
-                // Notify all listeners immediately
                 this.statusBarCallbacks.forEach(cb => {
                   try {
-                    cb(item);
+                    cb(itemWithExtId);
                   } catch (e) {
                     console.error('Error in statusBar callback:', e);
                   }
                 });
               },
 
-              // ✅ Register editor button
+              // Register editor button
               registerEditorButton: (btn) => {
                 console.log(`  ✓ Editor button registered:`, btn);
                 
-                // Store the button
-                this.editorButtons.push(btn);
+                const btnWithExtId = { ...btn, extensionId: extId };
+                this.editorButtons.push(btnWithExtId);
                 
-                // Notify all listeners immediately
                 this.editorButtonCallbacks.forEach(cb => {
                   try {
-                    cb(btn);
+                    cb(btnWithExtId);
                   } catch (e) {
                     console.error('Error in editorButton callback:', e);
                   }
@@ -127,9 +213,10 @@ class ExtensionRegistry {
 
     this.initialized = true;
     console.log("✅ All extensions initialized");
+    console.log(`📊 Active: ${this.extensionMetadata.filter(e => e.enabled).length}/${this.extensionMetadata.length}`);
   }
 
-  // ✅ Get current data
+  // Get current data
   getCommands() { 
     return this.commands; 
   }
@@ -154,12 +241,12 @@ class ExtensionRegistry {
     return this.editorButtons;
   }
   
-  // ✅ Execute command
+  // Execute command
   executeCommand(id, args) {
     if (this.commands.has(id)) {
       try {
         console.log(`⚡ Executing command: ${id}`);
-        this.commands.get(id)(args);
+        return this.commands.get(id)(args);
       } catch (e) {
         console.error(`Error executing command ${id}:`, e);
       }
@@ -168,12 +255,11 @@ class ExtensionRegistry {
     }
   }
 
-  // ✅ Register listeners with initial data
+  // Register listeners with initial data
   onStatusBarUpdate(callback) {
     console.log('📡 Status bar listener registered');
     this.statusBarCallbacks.push(callback);
 
-    // ✅ Send existing items immediately (if already initialized)
     if (this.initialized) {
       console.log(`  → Sending ${this.statusBarItems.length} existing items`);
       this.statusBarItems.forEach(item => {
@@ -185,7 +271,6 @@ class ExtensionRegistry {
       });
     }
 
-    // Return cleanup function
     return () => {
       console.log('📡 Status bar listener removed');
       this.statusBarCallbacks = this.statusBarCallbacks.filter(
@@ -198,7 +283,6 @@ class ExtensionRegistry {
     console.log('📡 Editor button listener registered');
     this.editorButtonCallbacks.push(callback);
 
-    // ✅ Send existing buttons immediately (if already initialized)
     if (this.initialized) {
       console.log(`  → Sending ${this.editorButtons.length} existing buttons`);
       this.editorButtons.forEach(btn => {
@@ -210,7 +294,6 @@ class ExtensionRegistry {
       });
     }
 
-    // Return cleanup function
     return () => {
       console.log('📡 Editor button listener removed');
       this.editorButtonCallbacks = this.editorButtonCallbacks.filter(

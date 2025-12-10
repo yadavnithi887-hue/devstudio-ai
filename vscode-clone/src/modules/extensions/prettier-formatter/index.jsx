@@ -1,32 +1,89 @@
-/**
- * Prettier Formatter Extension
- * Auto-formats code using Prettier
- */
+// File: src/modules/extensions/prettier-formatter/index.jsx
 
 export const metadata = {
-  id: 'prettier-formatter',
-  name: 'Prettier Formatter',
-  version: '1.0.0',
-  description: 'Code formatter using Prettier',
-  author: 'DevStudio Team'
+  id: 'devstudio.prettier-formatter',
+  name: 'Prettier Code Formatter',
+  version: '1.1.0',
+  description: 'Auto-format your code using Prettier with customizable options.',
+  author: 'DevStudio Team',
+  icon: 'Zap',
+  readme: `
+# Prettier Formatter Extension
+
+## Features
+- ✨ Format code with Prettier
+- 🎨 Support for multiple languages
+- ⚙️ Customizable formatting options
+- ⌨️ Keyboard shortcut (Ctrl+Shift+F)
+- 🔘 Editor toolbar button
+
+## Supported Languages
+- JavaScript/TypeScript
+- HTML/CSS
+- JSON
+- Markdown
+- And more...
+
+## Usage
+1. Open any supported file
+2. Click the "Format" button in the editor toolbar
+3. Or press Ctrl+Shift+F (Cmd+Shift+F on Mac)
+
+## Configuration
+Customize formatting options in Settings > Extensions > Prettier
+  `
 };
+
+export const settings = [
+  {
+    id: 'prettier.tabWidth',
+    label: 'Tab Width',
+    type: 'number',
+    default: 2,
+    description: 'Number of spaces per indentation level',
+    section: 'extensions',
+    extensionId: metadata.id
+  },
+  {
+    id: 'prettier.useTabs',
+    label: 'Use Tabs',
+    type: 'toggle',
+    default: false,
+    description: 'Use tabs instead of spaces',
+    section: 'extensions',
+    extensionId: metadata.id
+  },
+  {
+    id: 'prettier.semi',
+    label: 'Semicolons',
+    type: 'toggle',
+    default: true,
+    description: 'Add semicolons at the end of statements',
+    section: 'extensions',
+    extensionId: metadata.id
+  },
+  {
+    id: 'prettier.singleQuote',
+    label: 'Single Quotes',
+    type: 'toggle',
+    default: true,
+    description: 'Use single quotes instead of double quotes',
+    section: 'extensions',
+    extensionId: metadata.id
+  }
+];
 
 export function activate(context) {
   console.log('✨ Prettier: Activating...');
 
-  // ✅ Register format command
   context.registerCommand('prettier.format', async () => {
     console.log('✨ Prettier: Formatting code...');
 
-    // Check if Electron API is available
     if (!window.electronAPI || !window.electronAPI.formatWithPrettier) {
       context.window.showErrorMessage('Prettier not available (Electron API missing)');
       return;
     }
 
-    // Get current file from context
-    // NOTE: We need to get this from the active editor
-    // For now, we'll use a workaround with window.activeFile
     const activeFile = getActiveFile();
 
     if (!activeFile || !activeFile.content) {
@@ -34,26 +91,25 @@ export function activate(context) {
       return;
     }
 
-    // Show loading message
     context.window.showInformationMessage('Formatting code...');
 
     try {
       const settings = context.getSettings();
-      
+
       const result = await window.electronAPI.formatWithPrettier({
         code: activeFile.content,
         filePath: activeFile.realPath || activeFile.path || activeFile.name,
         options: {
-          tabWidth: settings.tabSize || 2,
-          semi: true,
-          singleQuote: true,
+          tabWidth: settings['prettier.tabWidth'] || 2,
+          useTabs: settings['prettier.useTabs'] || false,
+          semi: settings['prettier.semi'] !== false,
+          singleQuote: settings['prettier.singleQuote'] !== false,
           trailingComma: 'es5',
           printWidth: 80
         }
       });
 
       if (result.success) {
-        // Update editor content
         updateEditorContent(result.formatted);
         context.window.showInformationMessage('✅ Code formatted successfully!');
       } else {
@@ -66,7 +122,6 @@ export function activate(context) {
     }
   });
 
-  // ✅ Register editor button
   context.window.registerEditorButton({
     id: 'prettier.formatButton',
     label: 'Format',
@@ -76,23 +131,17 @@ export function activate(context) {
     position: 'right'
   });
 
-  // ✅ Register keyboard shortcut listener
   registerKeyboardShortcut();
 
-  console.log('✅ Prettier: Activated');
+  console.log('✅ Prettier Extension Activated!');
 }
 
-// Helper: Get active file from DOM/Window
 function getActiveFile() {
-  // This is a workaround - in production, context should provide this
-  // For now, we'll try to get it from window
   if (window.__activeFile) {
     return window.__activeFile;
   }
 
-  // Try to get from React DevTools or global state
   try {
-    // Look for Monaco editor instance
     const editor = window.monaco?.editor?.getModels?.()?.[0];
     if (editor) {
       return {
@@ -108,14 +157,11 @@ function getActiveFile() {
   return null;
 }
 
-// Helper: Update editor content
 function updateEditorContent(newContent) {
-  // Dispatch custom event that Layout can listen to
   window.dispatchEvent(new CustomEvent('prettier:formatted', {
     detail: { content: newContent }
   }));
 
-  // Also try to update Monaco directly if available
   try {
     const editor = window.monaco?.editor?.getModels?.()?.[0];
     if (editor) {
@@ -126,14 +172,10 @@ function updateEditorContent(newContent) {
   }
 }
 
-// Helper: Register keyboard shortcut
 function registerKeyboardShortcut() {
   window.addEventListener('keydown', (e) => {
-    // Ctrl+Shift+F or Cmd+Shift+F
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
       e.preventDefault();
-      
-      // Trigger format command
       if (window.registry) {
         window.registry.executeCommand('prettier.format');
       }
@@ -142,5 +184,5 @@ function registerKeyboardShortcut() {
 }
 
 export function deactivate() {
-  console.log('✨ Prettier: Deactivating...');
+  console.log('✨ Prettier Extension Deactivated');
 }
