@@ -192,13 +192,32 @@ ipcMain.handle('git:createBranch', async (event, { cwd, branch }) => {
 });
 
 // 6. Push & Pull
-ipcMain.handle('git:push', async (event, cwd, token) => {
+// main.js
+ipcMain.handle('git:push', async (event, { cwd, token }) => { // <--- यहाँ बदलें
+  console.log(`Pushing to repo in: ${cwd}`); // <-- डीबगिंग के लिए लॉग जोड़ें
   return new Promise((resolve) => {
     exec('git remote get-url origin', { cwd }, (err, url) => {
-       if(err || !url) { resolve({ success: false, error: 'No remote found' }); return; }
+       if (err || !url) {
+         console.error("Git Push Error: No remote found.");
+         resolve({ success: false, error: 'No remote URL configured for origin' });
+         return;
+       }
        let repoUrl = url.trim();
-       if(token && repoUrl.startsWith('https://github.com/')) repoUrl = repoUrl.replace('https://', `https://${token}@`);
-       exec(`git push "${repoUrl}"`, { cwd }, (error) => resolve({ success: !error, error: error?.message }));
+       if (token && repoUrl.startsWith('https://github.com/')) {
+         repoUrl = repoUrl.replace('https://', `https://${token}@`);
+       }
+       
+       // डीबगिंग के लिए कमांड को लॉग करें (टोकन को छोड़कर)
+       console.log(`Executing push command for URL: ${repoUrl.replace(token, '****')}`);
+
+       exec(`git push "${repoUrl}"`, { cwd }, (error, stdout, stderr) => {
+          if (error) {
+            console.error('Git Push Stderr:', stderr); // <-- वास्तविक त्रुटि को लॉग करें!
+            resolve({ success: false, error: stderr || error.message });
+            return;
+          }
+          resolve({ success: true });
+       });
     });
   });
 });
@@ -206,38 +225,107 @@ ipcMain.handle('git:pull', async (event, cwd) => {
   return new Promise(r => exec('git pull', { cwd }, (e) => r({ success: !e, error: e?.message })));
 });
 
-// 7. Publish to GitHub
-ipcMain.handle('git:publish', async (event, { cwd, token, repoName, isPrivate, files }) => {
-  return new Promise(async (resolve) => {
-    try {
-        const userResp = await fetch('https://api.github.com/user', { headers: { 'Authorization': `Bearer ${token}` } });
-        if (!userResp.ok) { resolve({ success: false, error: 'Invalid Token' }); return; }
-        const userData = await userResp.json();
-        
-        const response = await fetch('https://api.github.com/user/repos', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: repoName, private: isPrivate })
-        });
-        
-        const data = await response.json();
-        let remoteUrl = "";
-        if (response.ok) remoteUrl = data.clone_url.replace('https://', `https://${token}@`);
-        else if (data.errors && data.errors[0]?.message === 'name already exists on this account') remoteUrl = `https://${token}@github.com/${userData.login}/${repoName}.git`;
-        else { resolve({ success: false, error: data.message }); return; }
+// main.js - इस पूरे फंक्शन को बदलें
 
-        const sanitizedFiles = files.map(f => (f.endsWith('/') || f.endsWith('\\')) ? f.slice(0, -1) : f);
-        for (const file of sanitizedFiles) { try { const g = path.join(cwd, file, '.git'); if (fs.existsSync(g)) fs.rmSync(g, { recursive: true, force: true }); } catch(e){} }
-        
-        const addCmd = sanitizedFiles.length > 0 ? `git add "${sanitizedFiles.join('" "')}"` : `git add .`;
-        const commands = ['git init', addCmd, 'git commit -m "Initial commit"', 'git branch -M main', `git remote add origin "${remoteUrl}" || git remote set-url origin "${remoteUrl}"`, 'git push -u origin main'];
-        
-        const run = (cmd) => new Promise((res, rej) => exec(cmd, { cwd }, (err) => (err && !err.message.includes('warning') && !err.message.includes('exists')) ? rej(err) : res()));
-        
-        for(const cmd of commands) await run(cmd);
-        resolve({ success: true });
-    } catch(e) { resolve({ success: false, error: e.message }); }
-  });
+// 7. Publish to GitHub (New & Improved)
+// main.js - ipcMain.handle('git:publish', ...) को इससे बदलें
+
+ipcMain.handle('git:publish', async (event, { cwd, token, repoName, isPrivate, useExisting, existingRepoUrl }) => {
+  console.log('--- Starting Publish Process ---');
+  console.log('Received data:', { repoName, isPrivate, useExisting });
+
+  try {
+    let remoteUrl = existingRepoUrl;
+
+    // 1. अगर नया बना रहे हैं तो रिमोट यूआरएल बनाएं या प्राप्त करें
+    if (!useExisting) {
+      console.log(`Attempting to create NEW repository named: ${repoName}`);
+      const createResponse = await fetch('https://api.github.com/user/repos', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: repoName, private: isPrivate })
+      });
+      const data = await createResponse.json();
+      console.log('GitHub API Response:', data);
+
+      if (!createResponse.ok) {
+        if (data.errors && data.errors[0]?.message.includes('name already exists')) {
+           const userResp = await fetch('https://api.github.com/user', { headers: { 'Authorization': `Bearer ${token}` } });
+           const userData = await userResp.json();
+           remoteUrl = `https://github.com/${userData.login}/${repoName}.git`;
+        } else {
+          throw new Error(data.message || `GitHub API failed with status ${createResponse.status}`);
+        }
+      } else {
+          remoteUrl = data.clone_url;
+      }
+    }
+
+    if (!remoteUrl) {
+      throw new Error('Could not determine remote URL.');
+    }
+    
+    const authRemoteUrl = remoteUrl.replace('https://', `https://${token}@`);
+    
+    // 2. Git कमांड को एक-एक करके चलाएं
+    const run = (cmd) => new Promise((resolve, reject) => {
+        console.log(`Executing: ${cmd.replace(token, '****')}`);
+        exec(cmd, { cwd }, (err, stdout, stderr) => {
+            // कुछ सामान्य, गैर-घातक चेतावनियों को अनदेखा करें
+            if (err && !stderr.includes('already exists') && !stderr.includes('up-to-date')) {
+                console.error(`Command failed: ${cmd}\nStderr: ${stderr}`);
+                return reject(new Error(stderr));
+            }
+            resolve(stdout);
+        });
+    });
+
+    await run('git init');
+    await run('git add .');
+    await run('git commit -m "Initial commit" || echo "No changes to commit"'); // अगर कोई बदलाव न हो तो विफल न हों
+    await run('git branch -M main');
+    await run(`git remote add origin "${authRemoteUrl}" || git remote set-url origin "${authRemoteUrl}"`);
+    
+    // 🔥 मुख्य बदलाव: अंतिम पुश को try/catch में रखें
+    try {
+        await run('git push -u origin main');
+        console.log('--- Publish Process Successful ---');
+        return { success: true };
+    } catch (pushError) {
+        // 🔥 अगर पुश विफल होता है, तो रिमोट को हटा दें!
+        console.error('Push failed. Reverting by removing remote.');
+        await run('git remote remove origin');
+        throw pushError; // मूल त्रुटि को आगे फेंकें
+    }
+
+  } catch (e) {
+    console.error('--- Publish Process FAILED ---');
+    console.error('Error:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+// 8. Get User's Repos from GitHub
+ipcMain.handle('git:getGithubRepos', async (event, token) => {
+  if (!token) {
+    return { success: false, error: 'Token not provided' };
+  }
+  try {
+    const response = await fetch('https://api.github.com/user/repos?sort=updated&per_page=100', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!response.ok) {
+      return { success: false, error: 'Failed to fetch repos from GitHub' };
+    }
+    const repos = await response.json();
+    // हम केवल नाम और क्लोन यूआरएल भेजेंगे जो हमें चाहिए
+    const repoData = repos.map(repo => ({
+      name: repo.name,
+      clone_url: repo.clone_url
+    }));
+    return { success: true, repos: repoData };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });
 // --- 🔥 EXTENSION HANDLERS ---
 // 1. Live Server
@@ -261,3 +349,4 @@ ipcMain.handle('ext:prettier:format', async (event, { code, filePath }) => {
 app.on('ready', createWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (mainWindow === null) createWindow(); });
+

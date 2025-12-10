@@ -35,7 +35,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitStage: (cwd, file) => ipcRenderer.invoke('git:stage', { cwd, file }),
   gitUnstage: (cwd, file) => ipcRenderer.invoke('git:unstage', { cwd, file }),
   gitCommit: (cwd, message) => ipcRenderer.invoke('git:commit', { cwd, message }),
-  gitPush: (cwd, token) => ipcRenderer.invoke('git:push', cwd, token),
+  gitPush: (data) => ipcRenderer.invoke('git:push', data), // <--- यहाँ बदलें
+  // preload.js
+  getGithubRepos: (token) => ipcRenderer.invoke('git:getGithubRepos', token),
   gitPublish: (data) => ipcRenderer.invoke('git:publish', data),
   getBranches: (cwd) => ipcRenderer.invoke('git:getBranches', cwd),
   gitCheckout: (cwd, branch) => ipcRenderer.invoke('git:checkout', { cwd, branch }),
