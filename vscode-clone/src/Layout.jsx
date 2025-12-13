@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import ActivityBar from '@/components/ide/ActivityBar';
 import FileExplorer from '@/components/ide/FileExplorer';
 import EditorTabs from '@/components/ide/EditorTabs';
-import CodeEditor from '@/components/ide/CodeEditor';
+import CodeEditorWithAI from '@/components/ide/CodeEditorWithAI';
+import AIChatPanel from '@/components/ide/AIChatPanel';
 import Terminal from '@/components/ide/Terminal';
 import AIChat from '@/components/ide/AIChat';
 import WelcomeScreen from '@/components/ide/WelcomeScreen';
@@ -27,9 +28,36 @@ import { registry } from "@/modules/core/ExtensionRegistry";
  * Layout.jsx - Main IDE Layout
  * ✅ Fixed: Internal Extension System Integration
  * ✅ Registry-driven UI updates for StatusBar & Editor Buttons
+ * ✅ AI Panel Management Fixed
  */
 
 export default function Layout() {
+  // A. Add Terminal Path Function
+  const getCurrentTerminalPath = () => {
+    try {
+      // Try Electron API
+      if (window.electronAPI?.getHomePath) {
+        const path = window.electronAPI.getHomePath();
+        if (path) return path;
+      }
+      
+      // Try localStorage
+      const savedPath = localStorage.getItem('devstudio-last-terminal-path');
+      if (savedPath) return savedPath;
+      
+      // Try project root
+      const projectRoot = localStorage.getItem('devstudio-last-project');
+      if (projectRoot) return projectRoot;
+      
+      // Default for Windows
+      return 'C:\\Users\\Public';
+      
+    } catch (error) {
+      console.error('Error getting terminal path:', error);
+      return 'C:\\Users';
+    }
+  };
+
   // Core file/project state
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -101,6 +129,10 @@ export default function Layout() {
   const [showExtensionDocs, setShowExtensionDocs] = useState(false);
   const [focusLine, setFocusLine] = useState(null);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
+
+  // ✅ UPDATED: New states for AI Chat Panel
+  const [showAIChatPanel, setShowAIChatPanel] = useState(true); // Default TRUE to show on right
+  const [aiChatMaximized, setAiChatMaximized] = useState(false); // NEW
 
   // Sidebar resizing handlers
   const startResizing = useCallback(() => {
@@ -225,12 +257,19 @@ export default function Layout() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // 🔥 DEBUG PANEL SHORTCUT
-    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') {
+          e.preventDefault();
+          setShowDebugPanel(prev => !prev);
+          return;
+      }
+
+      // ✅ ADDED: Ctrl+Shift+I to toggle AI panel
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'i') {
         e.preventDefault();
-        setShowDebugPanel(prev => !prev);
+        setShowAIChatPanel(prev => !prev);
         return;
-    }
+      }
+
       if (showCreateModal || showQuickOpen || showGoToLine || showCommandPalette || !!deleteTarget) return;
 
       if (e.ctrlKey || e.metaKey) {
@@ -239,9 +278,7 @@ export default function Layout() {
             if (e.shiftKey) { e.preventDefault(); setShowCommandPalette(true); }
             else { e.preventDefault(); setShowQuickOpen(true); }
             break;
-          case 'i':
-            if (!e.shiftKey) { e.preventDefault(); /* toggle AI */ }
-            break;
+          // Note: Ctrl+I is now free for other uses, as AI toggle is Ctrl+Shift+I
           case '`':
             e.preventDefault(); setTerminalOpen(prev => !prev);
             break;
@@ -524,6 +561,124 @@ export default function Layout() {
     }
   };
 
+    // AI File Operation Handlers
+    const handleAIFileCreate = async (path, content) => {
+    console.log('🤖 AI Creating file:', path);
+    
+    if (!window.electronAPI) {
+      toast.error('Filesystem API not available');
+      return;
+    }
+
+    const rootPath = localStorage.getItem('devstudio-last-project');
+    if (!rootPath) {
+      toast.error('Please open a folder first');
+      return;
+    }
+
+    const isWindows = rootPath.includes('\\');
+    const sep = isWindows ? '\\' : '/';
+    
+    let finalPath = path;
+    if (!path.includes(rootPath)) {
+      finalPath = `${rootPath}${sep}${path}`;
+    }
+
+    try {
+      const result = await window.electronAPI.createFile(finalPath, content);
+      if (result.success) {
+        await handleOpenRecent(rootPath);
+        toast.success(`AI created: ${path.split(sep).pop()}`);
+        
+        const newFile = files.find(f => f.realPath === finalPath);
+        if (newFile) {
+          handleFileClick(newFile);
+        }
+      } else {
+        toast.error(result.error || 'Failed to create file');
+      }
+    } catch (error) {
+      console.error('AI file creation error:', error);
+      toast.error('Error creating file');
+    }
+  };
+
+  const handleAIFileUpdate = async (pathOrId, content) => {
+    console.log('🤖 AI Updating file:', pathOrId);
+    
+    const file = files.find(f => 
+      f.id === pathOrId || 
+      f.path === pathOrId || 
+      f.realPath === pathOrId
+    );
+
+    if (!file) {
+      toast.error('File not found');
+      return;
+    }
+
+    handleContentChange(file.id, content);
+
+    if (window.electronAPI && file.realPath) {
+      try {
+        const result = await window.electronAPI.saveFile(file.realPath, content);
+        if (result.success) {
+          toast.success('AI updated file');
+          setUnsavedFiles(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(file.id);
+            return newSet;
+          });
+        }
+      } catch (error) {
+        console.error('AI file save error:', error);
+      }
+    }
+  };
+
+  const handleAICommandExecute = async (command) => {
+    console.log('🤖 AI Executing command:', command);
+    
+    if (!window.electronAPI) {
+      toast.error('Terminal not available');
+      return { success: false, error: 'Electron API not available' };
+    }
+  
+    try {
+      // Show in output
+      setOutputLogs(prev => [...prev, `> ${command}`, 'Executing...']);
+      
+      // Execute
+      const result = await window.electronAPI.executeCommand(command);
+      
+      if (result.success) {
+        setOutputLogs(prev => [...prev, result.output || '✅ Done']);
+        
+        // If folder operation, refresh explorer
+        if (command.includes('mkdir') || command.includes('cd')) {
+          const rootPath = localStorage.getItem('devstudio-last-project');
+          if (rootPath) {
+            setTimeout(() => handleOpenRecent(rootPath), 500);
+          }
+        }
+        
+        return { success: true, output: result.output };
+      } else {
+        setOutputLogs(prev => [...prev, `❌ Error: ${result.error}`]);
+        return { success: false, error: result.error };
+      }
+      
+    } catch (error) {
+      setOutputLogs(prev => [...prev, `❌ ${error.message}`]);
+      return { success: false, error: error.message };
+    }
+  };  
+
+  const handleAIGitExecute = async (gitCommand) => {
+    console.log('🤖 AI Executing git:', gitCommand);
+    await handleAICommandExecute(gitCommand);
+  };
+
   // Render sidebar content based on activeView or extension panels
   const renderSidebar = () => {
     switch (activeView) {
@@ -595,13 +750,15 @@ export default function Layout() {
         <ActivityBar 
           activeView={activeView} 
           setActiveView={setActiveView} 
-          aiOpen={false} 
-          setAiOpen={() => {}} 
+          aiOpen={false}
+          setAiOpen={() => {}}
           installedExtensions={installedExtensions} 
           sidebarOpen={sidebarOpen} 
           onToggleSidebar={() => setSidebarOpen(prev => !prev)} 
           onOpenSettings={() => setShowSettingsModal(true)} 
-          extensionItems={extSidebarItems} 
+          extensionItems={extSidebarItems}
+          aiPanelOpen={showAIChatPanel}
+          onToggleAIPanel={() => setShowAIChatPanel(prev => !prev)}
         />
 
         {sidebarOpen && (
@@ -616,7 +773,10 @@ export default function Layout() {
           <Breadcrumbs file={activeFile} />
 
           <div className="flex-1 flex flex-col overflow-hidden relative">
-            <div className="flex-1 flex flex-col overflow-hidden relative">
+            
+            {/* Main Editor Container */}
+            <div className="flex flex-col overflow-hidden relative h-full">
+              
               {showExtensionDocs ? (
                 <div className="p-4">Extension Docs</div>
               ) : selectedExtension ? (
@@ -628,8 +788,9 @@ export default function Layout() {
                   <button onClick={() => setSelectedExtension(null)} className="absolute top-2 right-4 bg-[#3c3c3c] p-1 rounded text-white hover:bg-red-500">✕</button>
                 </div>
               ) : activeFile ? (
-                <CodeEditor
+                <CodeEditorWithAI
                   file={activeFile}
+                  files={files}
                   onContentChange={handleContentChange}
                   settings={settings}
                   onValidate={(markers) => setProblems(markers)}
@@ -664,6 +825,7 @@ export default function Layout() {
               )}
             </div>
 
+            {/* Terminal */}
             <div className={cn('border-t border-[#3c3c3c]', !terminalOpen && 'hidden')}>
               <Terminal
                 isOpen={terminalOpen}
@@ -676,9 +838,22 @@ export default function Layout() {
               />
             </div>
           </div>
-        </div>
+        </div> {/* End of main editor column */}
 
-        <AIChat isOpen={false} onClose={() => {}} activeFile={activeFile} onApplyCode={handleApplyCode} files={files} />
+        {/* B. Update JSX Structure */}
+        {/* ✅ ONLY AI PANEL - RIGHT SIDEBAR */}
+        {showAIChatPanel && (
+          <AIChatPanel
+            files={files}
+            activeFile={activeFile}
+            projectRoot={localStorage.getItem('devstudio-last-project')}
+            getCurrentTerminalPath={getCurrentTerminalPath}
+            onFileCreate={handleAIFileCreate}
+            onFileUpdate={handleAIFileUpdate}
+            onCommandExecute={handleAICommandExecute}
+            onFileOpen={handleFileClick}
+          />
+        )}
       </div>
 
       <DeleteModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={confirmDelete} itemName={deleteTarget?.item?.name || ''} type={deleteTarget?.type || ''} />
@@ -739,8 +914,7 @@ export default function Layout() {
       {/* Status Bar */}
       {renderStatusBar()}
       
-
       <Toaster />
     </div>
   );
-}  
+}
